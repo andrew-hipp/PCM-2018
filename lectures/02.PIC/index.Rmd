@@ -1,0 +1,181 @@
+---
+title       : Generalized Least Squares
+subtitle    : PCM Week 3
+author      : Andrew Hipp (ahipp@mortonarb.org)
+job         :
+framework   : io2012        # {io2012, html5slides, shower, dzslides, ...}
+highlighter : highlight.js  # {highlight.js, prettify, highlight}
+hitheme     : tomorrow      #
+widgets     : [mathjax]            # {mathjax, quiz, bootstrap}
+mode        : selfcontained # {standalone, draft}
+knit        : slidify::knit2slides
+---
+
+<style>
+{
+  background-color: #FFFFFF
+}
+</style>
+
+# Remember that in phylogenetic independent contrasts (PIC), our goal was to render the tip states:
+1. Independent
+2. Equal variance (normalized by variance)
+
+```{r, echo = FALSE, fig.width = 12, fig.cap = "Demonstration phylogeny, birth-death tree"}
+library(ape)
+library(geiger)
+ntips2 = 5
+node.cex = 1
+tr <- structure(list(edge =
+                    structure(c(9L, 9L, 8L, 8L, 7L, 7L, 6L, 6L, 3L, 4L, 1L, 2L, 8L, 9L, 7L, 5L), .Dim = c(8L, 2L),
+                    .Dimnames = list(c("V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8"), NULL)),
+    edge.length = c(0.458192227, 0.458192227, 0.455310462, 0.455310462,
+    0.2224209486, 0.2195391837, 0.6541055961, 1.331837007), Nnode = 4L,
+    tip.label = c("s1", "s2", "s3", "s4", "s5"), node.label = 6:9),
+    .Names = c("edge", "edge.length", "Nnode", "tip.label", "node.label"),
+    class = "phylo", order = "postorder", seed = 3315337.05385891)
+
+
+plotDemoTr <- function(x = NA) {
+  plot(tr, cex = node.cex * 1.5)
+  pp <- get("last_plot.phylo", envir=.PlotPhyloEnv)
+  edgelabels(row.names(tr$edge), adj = c(0,-0.5), frame = 'n', cex = node.cex)
+  nodesFont = rep(1, tr$Nnode)
+  nodelabels(cex = node.cex, font = nodesFont, adj = -1.2, frame = 'n', text = tr$node.label)
+}
+
+plotDemoTr()
+
+```
+
+---
+# We achieve these goals in two ways:
+1. <b>Independence:</b> contrasts between the tips are independent of one another.
+$$S1 - S2$$
+
+2. <b>Equal variance:</b> dividing contrasts by the standard deviation (the square-root of the branch length separating tips) normalizes contrasts to unit variance
+$${S1 - S2} \over \sqrt{V1 + V2}$$
+
+```{r, echo = FALSE, fig.width = 12, fig.height = 5}
+plot(tr)
+edgelabels(round(tr$edge.lengdemo/layouts/assets/layouts/slide.htmlth, 3), adj = c(0.5, -0.5), frame = 'n')
+```
+
+---
+# We have to do this because in ordinary least squares (OLS), data points are assumed constant and independent of one another. Thus, when we calculate $\beta$ using OLS, we assume that the covariance matrix is <b>I</b>, the identity matrix:
+
+$$
+  \begin{align}
+    \beta
+    & = (X'X)^{-1} X'y \\
+    & = (X'IX)^{-1} X'Iy \\
+  \end{align}  
+$$
+
+where, for our five-taxon tree:
+
+$$
+I =
+\begin{bmatrix}
+  1 & 0 & 0 & 0 & 0 \\
+  0 & 1 & 0 & 0 & 0 \\
+  0 & 0 & 1 & 0 & 0 \\
+  0 & 0 & 0 & 1 & 0 \\
+  0 & 0 & 0 & 0 & 1 \\
+\end{bmatrix}
+$$
+
+This covariance matrix simply indicates that variances are equal for all five tips, and covariances are all zero.
+
+---
+
+# Now let's back up a minute and get our covariance matrix, <b>C</b>. Recall our tree... this time, we'll plot it with branch lengths instead of labels:
+
+```{R, echo = FALSE, fig.width = 12}
+plot(tr)
+edgelabels(round(tr$edge.length, 3), adj = c(0.5, -0.5), frame = 'n')
+```
+
+---
+# The covariance matrix takes the distance from the tips to the root as the expected variance; these go on the diagonals. The off-diagonals are then the expected covariance, estimated as the amount of shared evolutionary history between each pair of taxa
+
+```{R, echo = FALSE, fig.width = 12, fig.height = 3}
+      plot(tr)
+      edgelabels(round(tr$edge.length, 3), adj = c(0.5, -0.5), frame = 'n')
+```    
+
+$$
+  C =
+      \begin{bmatrix}
+        1.332 & 0.877 & 0.654 & 0.654 & 0 \\
+        0.877 & 1.332 & 0.654 & 0.654 & 0 \\
+        0.654 & 0.654 & 1.332 & 0.874 & 0 \\
+        0.654 & 0.654 & 0.874 & 1.332 & 0 \\
+        0 & 0 & 0 & 0 & 1.332 \\
+      \end{bmatrix}
+$$
+
+---
+# Inverting the covariance matrix (using `solve`) yields
+
+
+
+$$
+    C^{-1} =
+    \begin{bmatrix}
+      1.447 & -0.749 & -0.207 & -0.207 & 0 \\
+      -0.749 & 1.447 & -0.207 & -0.207 & 0 \\
+      -0.207 & -0.207 & 1.441 & -0.742 & 0 \\
+      -0.207 & -0.207 & -0.742 & 1.441 & 0 \\
+      0 & 0 & 0 & 0 & 0.751 \\
+    \end{bmatrix}
+$$
+
+$C^{-1}$ has an interesting property. Where the column sums of $C$ estimate overall relatedness of each taxon to all others, the column sums of $C^{-1}$ estimate phylogenetic distinctiveness.
+
+---
+# Phylogenetic distinctiveness estimated as $C^{-1}$
+
+```{r, fig.width = 12, fig.height = 6.5}
+library(scales)
+tr2 <- ladderize(sim.bdtree(n = 20)) # generate a 20 taxon birth-death tree
+tr.w <- rescale(colSums(solve(vcv(tr2))), to = c(1, 4))
+plot.phylo(tr2, show.tip.label = FALSE)
+tiplabels(pch = 19, cex = tr.w, offset = 0.02)
+```
+
+---
+# The covariance matrix $C$ is also used to obtain the phylogenetic mean, the ancestral character state under a Brownian motion model:
+
+$$
+\hat{a} = (1' C^{-1} 1)^{-1} (1' C^{-1} X)
+$$
+
+which is the same as the PIC estimate of the root of the tree.
+
+---
+# More importantly for our purposes, $C^{-1}$ has the desirable property of yielding <b>I</b> when it is multiplied by <b>C</b> ($C^{-1}C = I$).
+
+```{r}
+C = vcv(tr)
+print(cbind(round(C, 3), rep(NA, 5), round(solve(C), 3)))
+print(round(C %*% solve(C), 3))
+```
+
+---
+# Incorporating $C$ into both the numerator and denominator of the least squares estimator generalizes that estimator to cases where $X$ and $Y$ are nonindependent with unequal variances. Thus, where the OLS estimator of $\beta$ was:
+
+$$
+  \begin{align}
+    \beta & = (X'X)^{-1} X'y \\
+    & = (X'IX)^{-1} X'Iy \\
+  \end{align}  
+$$
+
+the GLS estimator of $\beta$ is:
+
+$$
+\beta = (X'CX)^{-1} X'Cy
+$$
+
+---
