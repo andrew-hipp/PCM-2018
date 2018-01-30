@@ -1,0 +1,467 @@
+---
+title       : Model fitting and evaluation
+subtitle    : Which model and which parameter estimates? The likelihood and information theoretic approaches
+author      : Andrew Hipp (ahipp@mortonarb.org)
+job         : PCM 2018, week 4
+framework   : io2012        # {io2012, html5slides, shower, dzslides, ...}
+highlighter : highlight.js  # {highlight.js, prettify, highlight}
+hitheme     : tomorrow      #
+widgets     : [mathjax]            # {mathjax, quiz, bootstrap}
+mode        : selfcontained # {standalone, draft}
+knit        : slidify::knit2slides
+--- # overview
+## Overview
+The last two weeks have been focused on fitting regression models using the formally equivalent methods of phylogenetic independent contrasts (PIC) and generalized least squares (GLS). Near the end of the last lecture, we introduced the likelihood calculation for GLS, and today we'll return to that. GLS is in some ways a more flexible framework for analysis than PIC, in part because the likelihood for a GLS model can easily be calculated. In this session, we'll cover three topics:
+> - <b>Likelihood</b>: calculation and practical extraction from `R` objects
+> - <b>Information criteria</b>: history and theory, calculation of various IC and IC weights, and use of IC to select among models and average parameters over models
+> - <b>Effect size and model fit</b>: paying attention to the fact that even an unambiguously "best" model among a candidate suite of models may do a very poor job of explaining your data
+> - For now, we are leaving two important topics for class discussion:
+    - <b>Parametric bootstrapping</b>: Monte Carlo simulation under alternative models
+    - <b>Bayesian approaches</b>: MCMC / rjMCMC to integrate over models and parameters
+
+---
+## Likelihood
+The likelihood of a hypothesis ($\mathcal{L}(H|D)$) is proportional to $P(D|H)$. Colloquially, we generally say that the likelihood <i>is</i> the probability of the data under a particular model, which is fine given that the constant of proportionality is arbitrary.
+
+For example, the likelihood of a normal distribution for any given single data point is a function of the value of the point and the mean ($\mu$) and standard deviation ($\sigma$) of the distribution. Calculate the likelihood for a given distribution given a single point in `R` thus:
+
+```{r}
+message(paste(
+  'Likelihood of normal dist, mu = 10, sd = 1, at x = 10:', dnorm(x = 10, mean = 10, sd = 1),
+  '\nLikelihood of normal dist, mu = 10, sd = 1, at x = 8:', dnorm(x = 8, mean = 10, sd = 1)
+))
+```
+Any distribution with $\mu$ = 10 will have a higher likelihood for a single data point of 10 than for a single data point of 8.  
+
+---
+This is a pretty trivial case. Let's look at a slightly more complicated scenario, one in which we have a cloud of points and we just want to compare the likelihoods of two alternative distributions. We'll simulate data with $\mu$ = 10 and $\sigma$ = 1:
+
+```{r, fig.align = 'center', fig.height = 5}
+dat <- rnorm(n = 1000, mean = 10, sd = 1)  
+hist(dat, breaks = 20, main = "Histogram of dat; mean indicated by dashed line")
+abline(v = mean(dat), lty = 'dashed')
+```
+
+---
+Typically, we report not the likelihood but the log likelihood for a model. Let's compare this for two models. First, we'll compare three models:
+
+```{r}
+model.fits = list(
+  mean10.sd1 = dnorm(dat, mean = 10, sd = 1),
+  mean10.sd2 = dnorm(dat, mean = 10, sd = 2),
+  mean8.sd1 = dnorm(dat, mean = 8, sd = 1)
+)
+```
+Now let's report the product of the likelihoods, understanding from our knowledge of probability that the probability of $N$ independent events is the product of their individual probabilities.
+
+```{r}
+sapply(model.fits, prod)
+```
+But the result appears to beyond the precision of the computer. Drat!
+
+---
+Let's instead use the fact that the product of two numbers can also be expressed as the sum of the logarithms:
+
+```{r}
+model.fits.lnL <- sapply(model.fits, function(x) sum(log(x)))
+model.fits.lnL
+```
+
+That's better! So if we wanted to compare these models using maximum likelihood, we would say that the first model was the best fit. Given the rule of thumb of 2 log-likelihood units representing a significant difference among models with the same number of parameters, this is a highly significant difference.
+
+---
+### Likelihood: two parameter example
+But these too are trivial examples. Rarely are our models so highly specified. Usually, instead, we want to compare models that differ in parameters and estimate the parameter values by maximizing the likelihood for each model. Let's fit a fourth model, on in which we estimate the parameters $\sigma$ and $\mu$ from the data and calculate the likelihood as we did above.
+
+```{r}
+model.fits$k2 = dnorm(dat, mean = mean(dat), sd = sd(dat))
+model.fits.lnL['k2'] <- sum(log(model.fits$k2))
+model.fits.lnL
+```
+
+Not surprisingly, our fitted model has the highest likelihood of the models we have tested, as it is the only one that is not constrained. While the generated $\mu$ and $\sigma$ were 10 and 1 respectively, the estimated values are `r round(mean(dat), 3)` and `r round(sd(dat), 3)` respectively.
+
+---
+### When we use likelihood to compare models, likelihoods with all model parameters estimated from the data (e.g., our fourth model on the previous slide) are called unconstrained models. <br><br> Models in which we set any parameters to a specific value (e.g., models 1$-$3 on the previous slide) are constrained, and they by necessity have lower likelihoods than an unconstrained model with the same parameters.
+
+---
+### Likelihood: regression example
+Let's look at the likelihood of a standard regression. First, simulate data with slope of 1:
+
+```{r, fig.align = 'center', fig.height = 5}
+library(ggplot2)
+dat <- data.frame(y = dat, x = dat + rnorm(100, sd = 0.5))
+qplot(x, y, data = dat) + geom_smooth(method = 'lm')
+```
+
+---
+What does this likelihood look like? We can get it from the distribution of (you guessed it...) the residuals.
+
+```{r}
+library(magrittr)
+dat.resid <- resid(lm(y ~ x, dat))
+dat.lnL <- dnorm(dat.resid, mean = mean(dat.resid), sd = sd(dat.resid)) %>% log %>% sum
+dat.lnL
+```
+
+How much better does the model with a predictor do than a model with no predictor? The likelihood of the no-predictor model for $y$ is:
+
+```{r}
+dnorm(dat$y, mean = mean(dat$y), sd = sd(dat$y)) %>% log %>% sum
+```
+The predictor model (of form $y = mx + b + \varepsilon$) fits considerably better than the no-predictor model (of form $y = b + \varepsilon$). Importantly, the better-fit model has one extra parameter ($m$ in this formula). We'll come back to this point later.
+
+---
+### Likelihood: extracting from `R` objects
+In `R`, you generally don't need to have your hand on all these distributions to get a likelihood. There is a generic function `logLik` in the stats package that comes with the `R` base distribution. The function has methods that apply to many object types. Take a look:
+
+```{r}
+head(methods(logLik), 10)
+```
+For the `r length(grep('package', search()))` packages currently loaded, there are no fewer than `r length(methods(logLik))` `logLik` methods!
+
+---
+As a consequence, any properly formed objects of any of the classes following the dot in the list of logLik methods (e.g., `r paste(sapply(strsplit(head(methods(logLik), 10), '.', fixed = T), tail, 1), collapse = ', ')`, ...) should yield a log-likelihood using the `logLik` function. Let's try on our last example:
+
+```{r}
+dat.regModel <- lm(y ~ x, dat) # class = "lm"
+logLik(dat.regModel)
+```
+Compare this with our home-brewed log-likelihood:
+
+```{r}
+dat.lnL
+```
+Not too bad! The difference of `r abs(logLik(dat.regModel) - dat.lnL)` is probably just rounding error, as the logLik.lm method calculates the log normal distribution directly rather than taking the log of the raw distribution. If you want to see this, you can use `stats:::logLik.lm` to inspect the function.
+
+---
+## Information criteria
+Okay. So we can get a likelihood for a set of models, but often we will want to compare models that differ in numbers of parameters, and we know that a more parameter-rich model will tend to convey a higher likelihood on the data. In fact, adding parameters to an existing model can only improve the model, or keep it the same if the parameters don't add any additional information. Look at this example: we'll check the likelihood for our initial model as well as a model with a <i>completely</i> random variable added in:
+
+```{r}
+dat$z = rnorm(100)
+logLik(dat.regModel) # original model
+dat.regModel2 <- lm(y ~ x + z, dat) # model with an additional random predictor
+logLik(dat.regModel2)
+```
+
+---
+Adding a predictor known not to be correlated with the response increased model likelihood ever so slightly. If we simply compare likelihoods, we'll have a tendency to ratchet upward toward increasingly complex models irrespective of their explanatory value. We need a method that downweights models by complexity.<br><br>
+Moreover, as scientists we generally want to think about multiple hypotheses and their relative evidential value. Wouldn't it be nice, we think to ourselves, if we could rank models / hypotheses by their proximity to reality? Can we find a tool to address both problems?
+
+```{r, echo = F, fig.width = 14, fig.height = 6, fig.align = 'center'}
+plot(0,xlim = c(0,10), ylim = c(0, 10), axes = F, ylab = '', xlab = '', type = 'n')
+for(i in paste('Model', 1:10)) {
+  x=runif(1, 0,10)
+  y=runif(1,0,10)
+  segments(x0 = 5, y0 = 5, x1 = x, y1 = y, col = 'red', lty = 'dashed', lwd = 2)
+  legend(x, y, i,
+          xjust = 0.5, yjust = 0.5,
+          bg = 'white', box.col = 'white',
+          text.font = 3)
+}
+legend(5,5,'Full reality',
+      xjust = 0.5, yjust = 0.5,
+      cex = 2, text.font = 2,
+      bg = 'white', box.col = 'white')
+```
+
+---
+### Enter Solomon Kullback, Richard Leibler, and Hirotugu Akaike
+Information theory provides a solution to both of these problems. Originally introduced by Claude E. Shannon in 1948 for work in signal processing, the theory provided a framework for understanding information loss generally.  
+>- <img align="left" height=150px style="padding:10px" src=https://upload.wikimedia.org/wikipedia/commons/e/ed/Solomon-kullback.jpg>
+<img align="left" height=150px style="padding:10px" src=https://www.nsa.gov/about/cryptologic-heritage/historical-figures-publications/hall-of-honor/2002/assets/img/hoh-rleibler-sm.jpg>
+Solomon Kullback and Richard Leibler derived Kullback-Leibler (K-L) divergence in 1951 to describe the distance between two probability distributions. Burnham and Anderson describe it as “the information lost when [a function g] is used to approximate [a function f].”
+
+>- <img align="left" height=175px style="padding:10px" src=https://upload.wikimedia.org/wikipedia/commons/b/bc/Akaike.jpg>
+20 years later, Hirotugu Akaike realized this fundamental contribution to information theory could also be used to rank models in terms of predictive value. "On the morning of March 16, 1971, while taking a seat in a commuter train, I suddenly realized that the parameters of the factor analysis model were estimated by maximizing the likelihood and that the mean value of the logarithmus of the likelihood was connected with the Kullback-Leibler information number. This was the quantity that was to replace the squared error of prediction."
+
+
+---
+### Calculating Akaike's information criterion (AIC) and $\Delta$AIC
+Assuming you already know the $log(\mathcal{L})$, Akaike's information criterion is calculated as
+
+$$AIC = -2log(\mathcal{L}) + 2K$$
+
+where $K$ is the number of free parameters in the model. Recall that AIC estimates the K-L distance, the relative amount of information lost when approximating reality by any one of the models in the set of models you are evaluating. Thus:
+
+>1. Lower values of AIC indicate models that are estimated to predict full reality better.
+>2. AIC values are only meaningful in the context of multiple models. For this reason, AIC is really only useful when we consider it in terms of the distance between each model in our set and the model the lowest AIC:<br>
+$$\Delta_i = AIC_i - AIC_{min}$$
+<br>where $i$ indexes models.
+
+---
+### Calculating AIC in `R`
+Let's look back at the two models we compared earlier, one with a single predictor and one with two. We can get the number of free parameters using `attributes`
+```{r}
+K <- c(
+  regModel1 = attributes(logLik(dat.regModel))$df, # K for the single predictor model
+  regModel2 = attributes(logLik(dat.regModel2))$df # K for the two-predictor model
+  )
+K
+```
+
+---
+So let's use these now to get our AIC:
+
+```{r}
+aic <- c(
+  regModel1 = -2 * logLik(dat.regModel) + 2*K['regModel1'],
+  regModel2 = -2 * logLik(dat.regModel2) + 2*K['regModel2']
+  )
+aic
+```
+
+and $\Delta AIC$ = `r round(abs(diff(aic)), 4)`... `r ifelse(aic[1] < aic[2], 'model 1', 'model 2')` is the better model from the K-L information theoretic standpoint.
+<br><br>
+But how much better is good enough? Sometimes people use a threshold of 7-10 to decide that a model is unambiguously the best, but I don't care much for thresholds. Let's be more formal.
+
+---
+### AIC weights, $w_i$
+AIC weights ($w_i$, where $i$ indexes the models you are considering) can be calculated for your models . AIC weights estimate the probability of your models [1], and thus they are useful for assessing the relative support for your models. AIC weights are calculated as:
+
+$$\mathcal{l}_i = e^{-0.5\Delta AIC_i}$$
+
+$$w_i = {\mathcal{l}_i \over {\sum_{j=1}^n \mathcal{l}_j}}$$
+
+where $i$ and $j$ index models, $l$ estimates the model likelihood, and $w$ estimates the model probability.
+<br><br><br>
+<p style="font-size:medium">[1] The interested student may appreciate the equivalence between the BIC and AIC weights as derived in Burnham and Anderson 2002, p. 302-304, by modification of priors on the AIC weights, relative to the uniform priors assumed by BIC.</p>
+
+---
+### Let's calculate $w_i$ in `R`!
+In fact, let's create two functions, one to return AIC if we hand in a vector of log($\mathcal{L}$) and a vector of $K$, then one to calculate $w_i$. First, we'll define the function for AIC:
+
+```{r}
+aic <- function(lnL, K) {
+  if(length(lnL) != length(K)) stop('vectors lnL and K must be of same length')
+  out <- -2 * lnL + 2 * K # don't you love how R handles vectors?
+  if(!is.null(names(lnL))) names(out) <- names(lnL) # allows you to name models
+  return(out)
+}
+```
+Isn't that easy? Let's take our function for a test-drive:
+
+```{r}
+dat.aic <- aic(lnL = c(reg1 = logLik(dat.regModel), reg2 = logLik(dat.regModel2)), K = K)
+dat.aic
+```
+
+---
+Okay. Now let's make a function to generate $w_i$ from an AIC vector.
+
+```{r}
+aic.w <- function(aicVector) {
+  delta.aic <- aicVector - min(aicVector)
+  exp.aic <- exp(-0.5 * delta.aic)
+  out <- exp.aic / sum(exp.aic)
+  if(!is.null(names(aicVector))) names(out) <- names(aicVector)
+  return(out)
+}
+```
+Let's give it a whirl:
+
+```{r}
+dat.aic.w <- aic.w(dat.aic)
+dat.aic.w
+```
+
+This is kind of a dumb example, as the second model in our set was known <i>a priori</i> to be poor, but it's perhaps instructive to notice that when two models differ only in number of parameters, not in likelihood, that the simpler model will be favored.
+
+---
+"Gaudí and Mies remind us that there is no disputing matters of taste when it comes to assessing the value of simplicity and complexity in works of art. Einstein and Newton say that science is different – simplicity, in science, is not a matter of taste. Reichenbach and Akaike provided some reasons for why this is so. The upshot is that there are three parsimony paradigms that explain how the simplicity of a theory can be relevant to saying what the world is like:
+
+>* Paradigm 1: sometimes simpler theories have higher probabilities.
+>* Paradigm 2: sometimes simpler theories are better supported by the observations.
+>* Paradigm 3: sometimes the simplicity of a model is relevant to estimating its predictive accuracy."<br>[It is really this third paradigm that is most relevant to model selection using AIC]
+
+-- from Elliot Sober's 2016 Essay, "Why is simpler better?" in the journal <i>Aeon</i> https://aeon.co/essays/are-scientific-theories-really-better-when-they-are-simpler
+
+---
+### Small-sample AIC
+It turns out that AIC is biased with small sample sizes, so Burnham and Anderson recommend using a small-sample correction, AICc:
+
+$$ AIC_c = AIC + {2K(K + 1)\over n - K - 1} $$
+
+and we can make a function to do this as well:
+
+```{r}
+aic.c <- function(l, k, n) aic(l,k) + 2*k*(k + 1) / (n-k-1)
+```
+
+>* On the next page, let's demonstrate to ourselves that AICc approaches AIC as $N \to \infty$
+
+---
+```{r, fig.align = 'center', fig.width = 10, fig.height = 5, echo = T}
+n = seq(from = 10, to = 1000, by = 10)
+dat.lnL = sapply(n, function(x) logLik(lm(y ~ x, dat = dat[1:x, ])))
+dat.aic.c <- aic.c(dat.lnL, n = n, k = rep(3, length(n)))
+dat.aic <- aic(dat.lnL, K = rep(3, length(n)))
+plot(n, dat.aic - dat.aic.c, type= 'l', lwd = 2, xlab = 'Sample size', ylab = 'AIC - AICc')
+abline(h = 0, lty = 'dashed', lwd = 0.5)
+```
+
+---
+Because AICc converges on AIC, it is generally favored for all applications; as your sample size gets larger, the second term in AICc goes to 0, so AICc can always be used.<br><br>
+
+There are other information criteria in use, the most common of which is the Bayesian information criterion (BIC) or Schwarz information criterion (SIC), calculated as
+
+$$BIC = -2ln(\mathcal{L}) + ln(n)K$$
+
+Sober and Forster point out that because AIC is an unbiased, minimum variance estimator of "predictive accuracy" (I assume here that they mean K-L distance, though they don't reference it in the article), BIC is biased and has higher variance. Burnham and Anderson However, BIC was derived to rank models by posterior probability, and it may be favored by some in the crowd on those grounds alone [2].
+<br><br>
+<p style="font-size:medium">[2] Burnham and Anderson 2002 also critique BIC for an assumption that the true model is in the candidate set of models being evaluated. This argument is also articulated in a response article that I have only found online (https://sites.warnercnr.colostate.edu/kenburnham/wp-content/uploads/sites/25/2016/08/Response-to-Link-and-Barker.pdf), where they write: "BIC is clearly derived from asymptotics and approaches its target (the true model that is assumed to be in the model set) from below, often leading to the selection of under-fitting models when sample sizes are less than very large. Again, the dependence on the true model being in the model set must surely be viewed as a “buried assumption."</p>
+
+---
+### IC: Model averaging to estimate parameters
+Model weights make explicit the relative probabilities of alternative models. Often, no single model has a posterior probability > 0.95. In such a case, conditioning on a single model for the remainder of your analyses has the effect of decreasing the variance about the parameters you are estimating. Using a single model to estimate parameters without taking into account uncertainty in model selection is analogous to reporting the point estimate of a parameter without taking into account the standard error on that estimate.
+
+---
+### A model averaging example
+Let's look at an example using example data from the `geiger` package. First, let's bring in the data and plot it.
+```{r fig.height = 4, fig.align = 'center'}
+library(ggtree); data(geospiza)
+dat <- as.data.frame(scale(geospiza$dat))
+tr <- drop.tip(geospiza$phy, which(!geospiza$phy$tip.label %in% row.names(dat)))
+gheatmap(ggtree(tr), dat, colnames_angle = -45)
+```
+Sample size is low here (n = `r dim(dat)[1]`), so we'll definitely want to use AICc.
+
+---
+### Let's set up five models that we think are plausible explanations of wing length:
+>* Wing length ~ tarsus length
+>* Wing length ~ tarsus length + culmen length
+>* Wing length ~ tarsus length + culmen length + gonys width
+>* Wing length ~ tarsus length + culmen length + beak depth
+>* Wing length is not predicted by any of these
+
+Are these reasonable models? I couldn't tell you, but working with one's own data, one should identify models that make sense biologically and each represent a reasonable expectation about how the world works.
+
+---
+The corresponding models look like this in `R` (using the GLS machinery we learned about last week):
+
+```{r}
+library(nlme)
+geo.models <- list(
+  w.t = gls(wingL ~ tarsusL, dat, correlation = corPagel(1,tr)),
+  w.tc = gls(wingL ~ tarsusL + culmenL, dat, correlation = corPagel(1, tr)),
+  w.tcg = gls(wingL ~ tarsusL + culmenL + gonysW, dat, correlation = corPagel(1, tr)),
+  w.tcb = gls(wingL ~ tarsusL + culmenL + beakD, dat, correlation = corPagel(1, tr)),
+  w.0 = gls(wingL ~ 1, dat, correlation = corPagel(1, tr))
+  )
+sapply(geo.models, logLik)
+```
+We have variation across these models in both $\mathcal(L)$ and $K$, but no model is definitive.
+
+---
+Let's look at the AICc scores for these.
+```{r}
+geo.models.out <- sapply(geo.models, function(x) {
+   out = c(lnL = logLik(x),
+          aic.c = aic.c(logLik(x),
+                      k = attributes(logLik(x))$df,
+                      n = dim(dat)[1]),
+          k = attributes(logLik(x))$df)
+        })
+geo.models.out <- rbind(geo.models.out,
+                        w_i = aic.w(geo.models.out['aic.c', ]))
+geo.models.out
+```
+As we might have suspected, no single model has much more than 50% of the probability. We probably don't want to condition the rest of our conclusions on a single model.
+
+---
+So let's use model weights to average parameters over models. First, let's make a matrix with all the parameters for each model.
+
+```{r}
+geo.params <- unique(unlist(lapply(geo.models, function(x) names(coef(x)))))
+geo.mat <- geo.var.mat <- matrix(NA, length(geo.models), length(geo.params),
+                  dimnames = list(names(geo.models), geo.params))
+for(i in names(geo.models))
+  geo.mat[i, names(coef(geo.models[[i]]))] <- coef(geo.models[[i]])
+geo.mat
+```
+What about those blanks?
+
+---
+There are at least two schools of thoughts on what to do with missing parameters when you model average. One is that one only averages parameters over the models in which they occur. The rationale here I guess is that models without a given parameter must not be informative about that parameter. The second is that models lacking a parameter are actually best thought of as having a value of 0 (no effect) for that parameter. Let's try this 2nd option.
+
+```{r}
+geo.mat[is.na(geo.mat)] <- 0
+wi <- geo.models.out['w_i', ]
+geo.mat <- rbind(geo.mat, modelAvg = apply(geo.mat, 2, weighted.mean, w = wi))
+geo.mat <- cbind(geo.mat, 'w_i' = c(wi, sum(wi)))
+round(geo.mat, 4)
+```
+
+---
+### Quantifying uncertainty within and over models
+You can stop there if all you need is a point estimate, but that's not very satisfying to a statistically savvy crew like this. Knowing that variances are additive, let's get the weighted average of the variances and use these to get a model average variance, equal to
+
+$$var(\hat{\bar{Y}}) = \sum_{i=1}^R w_i \{ var(\hat{Y}_i|g_i) + (\hat{Y}_i - \hat{\bar{Y}})^2 \} $$
+
+(note that this is slightly different than the formula in Burnham and Anderson, in which the model-averaging variance term is presented, incorrectly I believe, as $(\hat{Y}_i - \hat{\bar{Y}_i})^2$).
+
+---
+### Within model variance: $var(\hat{Y}_i|g_i)$
+We can get the squared standard errors and variance using:
+
+```{r}
+geo.sq_se <- lapply(geo.models, function(i) diag(as.matrix(i$varBeta)))
+geo.var.list <- lapply(geo.sq_se, function(x) x * geo.models[[1]]$dims$N)
+for(i in names(geo.var.list))
+  geo.var.mat[i, names(geo.var.list[[i]])] <- geo.var.list[[i]]
+geo.var.mat
+```
+To the within-model variances, let's add the among-model variance, $(\hat{Y}_i - \hat{\bar{Y}})^2$.
+
+---
+### Among model variance: $(\hat{Y}_i - \hat{\bar{Y}})^2$
+We'll get the among-model variance by subtracting each individual parameter from the model-averaged values, again treating missing parameters as 0 (discussion point... either now or after lecture):
+```{r}
+geo.var.mat.amongModels <-
+  (geo.mat[1:5,1:5] - # point estimates per model
+    matrix(geo.mat['modelAvg', 1:5], 5, 5, byrow = T) # a matrix of model averages
+  ) ^ 2 # ... square the difference to get the variance
+geo.var.mat.amongModels
+```
+Note that the among-model variance is rather small in our case.
+
+---
+### Summing variance components
+Now we sum the variance components and take the weighted sum to get the $\sum_{i=1}^R w_i$ term at the beginning of the compound weighted average term. First the summing:
+```{r}
+geo.var.mat[which(is.na(geo.var.mat))] <- 0 # substitutes in 0 for missing data
+geo.var.mat <- geo.var.mat + geo.var.mat.amongModels
+geo.var.mat
+```
+and now the weighted average:
+
+---
+### Summing variance components, pg 2
+
+```{r}
+geo.var.total <- apply(geo.var.mat, 2, weighted.mean, w = wi)
+geo.var.total
+```
+... which you can use to get standard errors by the standard formula, $\sigma_{\bar{x}} = {\sigma \over \sqrt{n}}$.
+
+```{r}
+sqrt(geo.var.total) / sqrt(13)
+```
+... and these, of course, are useful for estimating confidence intervals, which now integrate over both parameter and model uncertainty.
+
+---
+## But how well does your model explain the data?
+It's worth remembering that no matter how much time you spend considering models, you may not find any that do a good job of explaining the variance in your data in an absolute sense. Interpreting $R^2$ is a bit complicated for GLS models, in part due to the fact that the data are transformed. The following GLS $R^2$ formula comes from a classic econometrics text (Judge et al. 1985)... it may nonetheless be worth considering the $R^2$ of an OLS model as well as the GLS model.
+
+```{r}
+source('https://raw.githubusercontent.com/andrew-hipp/morton/master/R/gls.r.squared.R')
+sapply(geo.models, gls.r.squared)
+```
+Note the unreasonably high $R^2$ for the models here... partial $r^2$ is considered particularly difficult to interpret in GLS regressions (Lavin et al. 2008, Physiological and Biochemical Zoology 81(5):526–550), but this is an odd result nonetheless.
+
+---
+## And what does each parameter tell you?
+At the end of all this, don't forget to look at your parameter estimates. If you have rescaled your data to mean of 0 and unit variance, the multiple / partial regression coefficients tell you the relative effect of each predictor on the response, in sd units; and the effect of each if all the others are held at their mean value (0 on the rescaled data). <br><br>
+
+Effect size and direction is in the end generally what you care about and how your hypotheses were formulated: which predictors have the greatest effect on the response, and do they have a positive or negative effet on the response? Your analysis won't have amounted to much if you don't take time to interpret your results after the results are in.
