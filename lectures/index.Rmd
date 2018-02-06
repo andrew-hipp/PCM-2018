@@ -1,0 +1,461 @@
+---
+title       : Stretching the tree
+subtitle    : Using tree and VCV transformations to infer trait evolutionary history
+author      : Andrew Hipp (ahipp@mortonarb.org)
+job         : PCM 2018
+framework   : io2012        # {io2012, html5slides, shower, dzslides, ...}
+highlighter : highlight.js  # {highlight.js, prettify, highlight}
+hitheme     : tomorrow      #
+widgets     : [mathjax]            # {mathjax, quiz, bootstrap}
+mode        : selfcontained # {standalone, draft}
+knit        : slidify::knit2slides
+---
+## Why stretch a tree?
+To date, we have focused on the phylogenetic covariance matrix primarily as a statistical tool to address non-independence among tips of a phylogeny, and secondarily as a tool for estimating ancestral states under Brownian motion model.
+
+```{r, echo = FALSE, fig.width = 12, fig.align = 'center'}
+options(warn = -1)
+library(ape)
+library(geiger)
+ntips2 = 5
+node.cex = 1
+tr <- structure(list(edge =
+                    structure(c(9L, 9L, 8L, 8L, 7L, 7L, 6L, 6L, 3L, 4L, 1L, 2L, 8L, 9L, 7L, 5L), .Dim = c(8L, 2L),
+                    .Dimnames = list(c("V1", "V2", "V3", "V4", "V5", "V6", "V7", "V8"), NULL)),
+    edge.length = c(0.458192227, 0.458192227, 0.455310462, 0.455310462,
+    0.2224209486, 0.2195391837, 0.6541055961, 1.331837007), Nnode = 4L,
+    tip.label = c("s1", "s2", "s3", "s4", "s5"), node.label = 6:9),
+    .Names = c("edge", "edge.length", "Nnode", "tip.label", "node.label"),
+    class = "phylo", order = "postorder", seed = 3315337.05385891)
+
+
+plotDemoTr <- function(x = NA) {
+  plot(tr, cex = node.cex * 1.5)
+  pp <- get("last_plot.phylo", envir=.PlotPhyloEnv)
+  edgelabels(row.names(tr$edge), adj = c(0,-0.5), frame = 'n', cex = node.cex)
+  nodesFont = rep(1, tr$Nnode)
+  nodelabels(cex = node.cex, font = nodesFont, adj = -1.2, frame = 'n', text = tr$node.label)
+}
+
+plotDemoTr()
+```
+
+---
+Recall what the covariance matrix is based on: expected variance accumulated along each branch, where branch length predicts the amount of accumulated variance.
+
+$$
+C =
+\begin{bmatrix}
+  1.332 & 0.877 & 0.654 & 0.654 & 0.000 \\
+  0.877 & 1.332 & 0.654 & 0.654 & 0.000 \\
+  0.654 & 0.654 & 1.332 & 0.874 & 0.000 \\
+  0.654 & 0.654 & 0.874 & 1.332 & 0.000 \\
+  0.000 & 0.000 & 0.000 & 0.000 & 1.332 \\
+\end{bmatrix}
+$$
+
+```{R, echo = FALSE, fig.align = 'center', fig.width = 12, fig.height = 5}
+      plot(tr)
+      edgelabels(round(tr$edge.length, 3), adj = c(0.5, 0.5), bg = 'gray95')
+```
+
+---
+This means that stretching any single branch implies a model in which traits have had more opportunity to accumulate variance along that branch. A longer branch, in other words, implies two things: (1) a larger expected amount of trait evolution along that branch, and (2) lower covariance between the descendents of that branch an the remainder of the tree.<br><br>
+
+Let's imagine a scenario in which the stem group of tips S1 and S2 below has undergone a tripling in the rate of trait evolution. This would imply a tree stretching that looks like this:
+
+```{R, echo = FALSE, fig.align = 'center', fig.width = 12, fig.height = 5}
+layout(matrix(1:2, 1))
+plot(tr, main = "Tree 1",
+         edge.color = c(rep('black', 2), rep('red', 3), rep('black', 3)),
+         edge.width = c(2,2,4,4,4,2,2,2))
+edgelabels(round(tr$edge.length, 3), adj = c(0.5, 0.5), bg = 'gray95')
+
+tr2 <- tr
+tr2$edge.length[3:5] <- 3*tr2$edge.length[3:5]
+plot(tr2, main = "Tree 2",
+         edge.color = c(rep('black', 2), rep('red', 3), rep('black', 3)),
+         edge.width = c(2,2,4,4,4,2,2,2))
+edgelabels(round(tr2$edge.length, 3), adj = c(0.5, 0.5), bg = 'gray95')
+```
+
+---
+... and compare the covariance matrices. Note that the variances and covariances for S1 and S2 (the first two rows / columns) change, but nothing else does:
+
+$$
+C_{Tree 1} =
+\begin{bmatrix}
+  1.332 & 0.877 & 0.654 & 0.654 & 0.000 \\
+  0.877 & 1.332 & 0.654 & 0.654 & 0.000 \\
+  0.654 & 0.654 & 1.332 & 0.874 & 0.000 \\
+  0.654 & 0.654 & 0.874 & 1.332 & 0.000 \\
+  0.000 & 0.000 & 0.000 & 0.000 & 1.332 \\
+\end{bmatrix}
+$$
+
+$$
+C_{Tree 2} =
+\begin{bmatrix}
+  2.687 & 1.321 & 0.654 & 0.654 & 0.000 \\
+  1.321 & 2.687 & 0.654 & 0.654 & 0.000 \\
+  0.654 & 0.654 & 1.332 & 0.874 & 0.000 \\
+  0.654 & 0.654 & 0.874 & 1.332 & 0.000 \\
+  0.000 & 0.000 & 0.000 & 0.000 & 1.332 \\
+\end{bmatrix}
+$$
+
+Stretching the tree in this way, it turns out, is equivalent to making the direct transformation of $C$ that Brian O'Meara introduces in his 2006 paper. Let's calculate it as he has done.
+
+---
+In this tree, the rate on the red branches we will denote as $\sigma^2_A$ and the rate on the black branches as $\sigma^2_B$, echoing O'Meara's figure 3. We'll transform the original $C$ thus:
+
+$$
+C_{Tree 2} =
+\begin{bmatrix}
+  \color{red}{0.654\sigma^2_B + 0.678\sigma^2_A} & \color{red}{0.654\sigma^2_B + 0.222\sigma^2_A} & 0.654\sigma^2_B & 0.654\sigma^2_B & 0.000\sigma^2_B \\
+  \color{red}{0.654\sigma^2_B + 0.222\sigma^2_A} & \color{red}{0.654\sigma^2_B + 0.678\sigma^2_A} & 0.654\sigma^2_B & 0.654\sigma^2_B & 0.000\sigma^2_B \\
+  0.654\sigma^2_B & 0.654\sigma^2_B & 1.332\sigma^2_B & 0.874\sigma^2_B & 0.000\sigma^2_B \\
+  0.654\sigma^2_B & 0.654\sigma^2_B & 0.874\sigma^2_B & 1.332\sigma^2_B & 0.000\sigma^2_B \\
+  0.000\sigma^2_B & 0.000\sigma^2_B & 0.000\sigma^2_B & 0.000\sigma^2_B & 1.332\sigma^2_B \\
+\end{bmatrix}
+$$
+
+```{R, echo = FALSE, fig.align = 'center', fig.width = 12, fig.height = 5}
+plot(tr, main = "Tree 1",
+         edge.color = c(rep('black', 2), rep('red', 3), rep('black', 3)),
+         edge.width = c(2,2,4,4,4,2,2,2))
+edgelabels(round(tr$edge.length, 3), adj = c(0.5, 0.5), bg = 'gray95')
+```
+
+---
+Because we used a scalar of 3 for $\sigma^2_A$, we get the following if we multiply out:
+
+$$
+C_{Tree 2} =
+\begin{bmatrix}
+  \color{red}{0.654 + 2.034} & \color{red}{0.654} + 0.666 & 0.654 & 0.654 & 0.000 \\
+  \color{red}{0.654 + 0.666} & \color{red}{0.654} + 2.034 & 0.654 & 0.654 & 0.000 \\
+  0.654 & 0.654 & 1.332 & 0.874 & 0.000 \\
+  0.654 & 0.654 & 0.874 & 1.332 & 0.000 \\
+  0.000 & 0.000 & 0.000 & 0.000 & 1.332 \\
+\end{bmatrix}
+$$
+<br>
+$$
+ =
+\begin{bmatrix}
+  \color{red}{2.688} & \color{red}{1.320} & 0.654 & 0.654 & 0.000 \\
+  \color{red}{1.320} & \color{red}{2.688} & 0.654 & 0.654 & 0.000 \\
+  0.654 & 0.654 & 1.332 & 0.874 & 0.000 \\
+  0.654 & 0.654 & 0.874 & 1.332 & 0.000 \\
+  0.000 & 0.000 & 0.000 & 0.000 & 1.332 \\
+\end{bmatrix}
+$$
+
+... which is exactly (aside from rounding error) what we got when we calculated $C$ on tree 2 after stretching the branches. Note that not all transformations of $C$ for a given tree can be recovered by calculating $C'$ on a modified tree, but rate transformations of the type described in O'Meara et al. 2006 can.
+
+---
+As you may recall from two weeks ago, these are actually regressions with no slope. Thus, model one has two free parameters:
+
+> * $\hat{a}$, the phylogenetic mean
+> * $\sigma^2$, the rate
+
+---
+As you may recall from two weeks ago, these are actually regressions with no slope. Thus, model one has two free parameters:
+
+ * $\hat{a}$, the phylogenetic mean
+ * $\sigma^2$, the rate
+
+which we learned to estimate two weeks ago using generalized least squares:
+$$
+\hat{a} = (1' C^{-1} 1)^{-1} (1' C^{-1} X)
+$$
+$$
+\sigma^2 = {{(x - \hat{a})' C^{-1} (x - \hat{a})} \over N}
+$$
+
+---
+As you may recall from two weeks ago, these are actually regressions with no slope. Thus, model one has two free parameters:
+
+ * $\hat{a}$, the phylogenetic mean
+ * $\sigma^2$, the rate
+
+which we learned to estimate two weeks ago using generalized least squares:
+$$
+\hat{a} = (1' C^{-1} 1)^{-1} (1' C^{-1} X)
+$$
+$$
+\sigma^2 = {{(x - \hat{a})' C^{-1} (x - \hat{a})} \over N}
+$$
+
+Model two differs only in having only an additional rate parameter. The two models--model 1 with a single rate and phylogenetic mean, model 2 with two rates but a single phylogenetic mean--are based on the same tip data and are thus directly comparable. They are also based on the same tree and thus a transformation of the same $C$, but this does not enter in as a parameter in the model: only the parameter that we use to scale $C$ enters into model 2 as a parameter.
+
+---
+The relative support for these two models can be estimated as their log-likelihoods:
+
+* $ln(\mathcal{L}_{Tree 1})$: the log-likelihood of the Brownian motion model for tip data + Tree 1
+* $ln(\mathcal{L}_{Tree 2})$: the log-likelihood of the Brownian motion model for tip data + Tree 2
+
+which we calculated two weeks using a function in the `mvtnorm` package:
+```
+lnL <- dmvnorm(x, rep(a.hat, N), V, log = TRUE) # from mvtnorm package
+```
+Here:
+> * `x` are your tip data, arranged in the same order as the rows and columns of $C$
+> * `a.hat` is the phylogenetic mean
+> * `N` is the number of tips on the tree
+> * `V` = $\sigma^2 C$... but only for model 1!
+> * For model 2, `V` is calculated using both $\sigma^2_A$ and $\sigma^2_B$, as shown a few slides ago.
+
+---
+What we've done here to investigate a model of change in the rate of evolution of a trait is what O'Meara et al. refer to as the "noncensored" test. It requires you to assume that you model which clade(s) are affected by a change in rate as well as <i>where</i> on the branch that rate change occurs. In most cases, I suspect that your model likelihoods will be little affected by the latter, but it is an assumption. You can dispense with this assumption by cleaving the tree in two, eliminating the intervening branch, and summing the log likelihoods. This costs you however an additional parameter: model 2 will have four parameters instead of three, as you will now have to calculate $\hat{a}$ as well as $\sigma^2$ separately for each tree. You'll implement the censored test in today's tutorial.
+
+```{r fig.width = 14, fig.align = 'center', fig.height = 4, echo = F}
+layout(matrix(c(1,2,1,3), 2, byrow = TRUE))
+par(mar = rep(0.5, 4), oma = c(2,2,4,2))
+plot(tr2, main = "Tree 2, uncenscored",
+         edge.color = c(rep('black', 2), rep('red', 3), rep('black', 3)),
+         edge.width = c(2,2,4,4,4,2,2,2),
+         cex = 1.5)
+px = get('last_plot.phylo', envir=.PlotPhyloEnv)$x.lim
+
+plot(drop.tip(tr2, c('s1', 's2')), main = "Tree 2, censored",
+          edge.color = 'black', edge.width = 2,
+          x.lim = px,
+          cex = )
+
+plot(drop.tip(tr2, c('s3', 's4', 's5')), edge.color = 'red', edge.width = 4,
+          x.lim = c(-2.4, px[2]),
+          cex = 1)
+```
+
+---
+You can compare these models using either a likelihood ratio test:
+$$D = -2 (ln(\mathcal{L}_{Tree 1}) - ln(\mathcal{L}_{Tree 2})) $$
+where Tree 1 is the simpler of the two models. With large enough sample sizes, $D$ is distributed approximately as $\chi^2$ with d.f. equal to the difference in free parameters between model 1 and model 2. You can also simulate $D$ under a Brownian motion model, which you will also do in today's tutorial.
+
+<br>
+
+You can also compare models using AICc weights, as we discussed last week, and use model-averaging to estimate the rates on different branches. Another approach altogether is to use reversible-jump Markov chain Monte Carlo (rjMCMC) to obtain model-averaged rates for every branch on the tree, as introduced in two papers you had in the supplements for this week (Eastman et al. and Venditti et al., both 2011, and apparently independent, as neither references the other).
+
+---
+# There are other tree-scaling models out there
+There are a few common tree scaling parameters that you may consider. Three were introduced by Pagel in his 1997 and 1999 publications:
+
+> * <b>$\lambda$, a scalar multiplied by the off-diagonal elements of the covariance matrix.</b> This may be interpreted approximately as the proportion of trait variance that is phylogenetically heritable.
+> * <b>$\kappa$, an exponent on individual branches.</b> This may be interpreted as the importance of branch length relative to number of nodes.
+> * <b>$\delta$, an exponent on node depths.</b> This is similar to the ACDC model of Blomberg et al. 2003 or the early-burst model of Harmon et al. 2010; $\delta > 1$ indicates that evolution has accelerated.
+
+> * Let's look at each of these in turn on a simulated birth-death tree of 50 tips.
+
+```{r echo = F}
+tr3 <- sim.bdtree(n = 50)
+```
+
+---
+# Pagel's $\lambda$
+Pagel's $\lambda$ is perhaps the most commonly implemented tree scaling parameter... this is the scalar we have estimated jointly with GLS regression coefficients to relax the assumption of strict Brownian motion. Formulated as a multiplier of the off-diagonal elements of $C$ (modifying covariance while leaving variance untouched), $\lambda$ can also be implemented as a tree scalar by multiplying all branches by $\lambda$ and then stretching the tree back out to its original unscaled length:
+
+```{r echo = F, fig.width = 14, fig.height = 5, fig.align = 'center'}
+layout(matrix(1:4, 1))
+options(warn = -1)
+plot(tr3, show.tip.label = F, main = 'Birth-death tree')
+plot(lambdaTree(tr3, 0.8), show.tip.label = F, main = 'lambda = 0.8')
+plot(lambdaTree(tr3, 0.4), show.tip.label = F, main = 'lambda = 0.4')
+plot(lambdaTree(tr3, 0.1), show.tip.label = F, main = 'lambda = 0.1')
+```
+
+---
+# Pagel's $\kappa$
+Pagel's $\kappa$ has been utilized in a number of studies to test a speciational model (one in which the amount of character change is associated with cladogenesis rather than time)... this strikes me as making a dubious assumption about sampling. However, fitted to an ultrametric tree, $\kappa$ more generally tests the relationship between time and character evolution, allowing us to ask for example whether trait evolution occurs disproportionately on shorter or longer branches.
+```{r echo = F, fig.width = 14, fig.height = 6, fig.align = 'center'}
+layout(matrix(1:4, 1))
+options(warn = -1)
+plot(tr3, show.tip.label = F, main = 'Birth-death tree')
+plot(kappaTree(tr3, 0.8), show.tip.label = F, main = 'kappa = 0.8')
+plot(kappaTree(tr3, 4), show.tip.label = F, main = 'kappa = 5')
+plot(kappaTree(tr3,0), show.tip.label = F, main = 'kappa = 0')
+```
+
+---
+# Pagel's $\delta$
+Think of this as a model of increasing or decreasing rates of trait evolution. $\delta$ >> 1, for example, may indicate a burst of diversification near the crown of the tree; $\delta$ << 1 will approximate $\lambda$ << 1, high species-specific evolution.
+```{r echo = F, fig.width = 14, fig.height = 7, fig.align = 'center'}
+layout(matrix(1:4, 1))
+options(warn = -1)
+plot(tr3, show.tip.label = F, main = 'Birth-death tree')
+plot(deltaTree(tr3, 0.8), show.tip.label = F, main = 'delta = 0.8')
+plot(deltaTree(tr3, 0.1), show.tip.label = F, main = 'delta = 0.1')
+plot(deltaTree(tr3, 4), show.tip.label = F, main = 'delta = 5')
+```
+
+---
+# Jumps in phenotypic space
+Let's look at two more interesting types of tree scaling. The first is a model in which we allow evolutionary jumps in trait space. This is the model presented by Duchen et al. (2017), in which they write, "Under the assumption that jump effects are normally distributed, a jump configuration can be seen as simply stretching the branches of the trevolutionee on which they occur, and the likelihood is then given by a multivariate normal distribution with the variance–covariance matrix resulting from the stretched tree" (p. 951). Handy! Such a rescaling might look like this, if we imagine 5 branches in which the rate of evolution has increased 20-fold:
+```{r echo = F, fig.width = 14, fig.height = 5, fig.align = 'center'}
+tr4 <- tr3
+tr4.edges <- sample(which(!tr4$edge[,2] %in% 1:50), 5)
+tr4$edge.length[tr4.edges] <- tr4$edge.length[tr4.edges] * 20
+plot(tr4, show.tip.label = F)
+```
+
+---
+# Ornstein-Uhlenbeck models
+A second model, which we will dive into in much greater detail next week, is the Ornstein-Uhlenbeck model of stabilizing selection. Under this model, trait evolution is modeled as according to a Brownian motion process with a pull toward an optimum. The effect of natural selection is to erode phylogenetic structure, similar to what we saw with Pagel's $\lambda$... only in this case, the tree scaling has an explicit evolutionary interpretation. It turns out that the O-U model can be expressed in terms of a tree scaling if and only if your phylogeny is ultrametric; if not, the model must be expressed as a transformation of the covariance structure. Here the scaling parameter is $\alpha$, sometimes referred to as the rate of adaptation:
+
+```{r echo = F, fig.width = 14, fig.height = 4, fig.align = 'center'}
+layout(matrix(1:4, 1))
+options(warn = -1)
+plot(tr3, show.tip.label = F, main = 'Birth-death tree')
+plot(ouTree(tr3, 0.00001), show.tip.label = F, main = 'alpha = 0.00001')
+plot(ouTree(tr3, 0.8), show.tip.label = F, main = 'alpha = 0.8')
+plot(ouTree(tr3, 5), show.tip.label = F, main = 'alpha = 5')
+```
+
+---
+# Tree-stretching methods apply GLS to the question of how trait evolution has proceeded
+Importantly, this is the first time we're selecting among models of evolution for a single trait in which the target of our inquiry is the evolutionary history of that trait. In the Garland and Ives papers we've looked at to this point, the rationale for tree stretching has been strictly statistical. Here, by stretching the tree, modeling a modified expected covariance structure in the data, we evaluate the support for alternative histories of trait evolution. As Blomberg et al. (2003, p. 726) write:
+<br><br>
+
+<p><i>
+ Most commonly, the type of branch-length transformation used has been chosen arbitrarily and
+ from a purely statistical perspective.... Alternatively, if branch lengths are viewed as entities
+ that may contain important biological information in their own right, then transformations of branch
+ lengths according to some explicit model of evolution and estimation of the parameters in the model may
+ provide useful information about the underlying evolutionary processes.
+</i></p>
+
+<br>
+We're on new ground, friends.
+
+---
+# Testing for phylogenetic signal: Pagel's $\lambda$
+Everything we have talked about in this class to date is predicated on the assumption that the tree is a meaningful predictor of trait variance. Often in evolutionary biology or ecology you want to test that assumption, asking (1) whether there is significant <b>phylogenetic signal</b> in your data and (2) what the particular direction of phylogenetic signal is (i.e., are close relatives more similar or less similar than expected if they were unrelated).<br>
+
+We have already seen how $\lambda$ model can be used to test for phylogenetic signal. Let's do a worked example. First, let's generate two datasets, one with high phylogenetic signal (Brownian motion) and one with low phylogenetic signal ($\lambda = 0.2). We'll also create a matrix to hold the output.
+
+```{r}
+options(warn = -1)
+dat3 <- list(low = sim.char(lambdaTree(tr3, 0.2), par = 1, model = "BM")[,,1],
+              high = sim.char(tr3, par = 1, model = "BM")[,,1])
+out <- matrix(NA, nrow = 4, ncol = 4,
+              dimnames = list(c('BM.high', 'lambda.high', 'BM.low', 'lambda.low'),
+                              c('lambda', 'sigsq', 'lnL', 'aicc')))
+```
+
+---
+The $\lambda$ model is clearly favored on the low-phylogenetic signal dataset:
+```{r}
+for(model in c('lambda', 'BM')) {
+  for(signal in c('low', 'high')) {
+    temp <- fitContinuous(tr3, dat3[[signal]], model = model)
+    out[paste(model, signal, sep = '.'), c('sigsq', 'lnL', 'aicc')] <-
+      unlist(temp$opt[c('sigsq', 'lnL', 'aicc')])
+    if(model == 'lambda') out[paste(model, signal, sep = '.'), 'lambda'] <- temp$opt$lambda
+  }}
+print(out)
+```
+It always worth asking whether the signal is significantly different from 0:
+```
+fitContinuous(lambdaTree(tr3, 0), dat3[['low']], model = 'BM')
+```
+I leave this to you to try out.
+
+---
+# Testing for phylogenetic signal: Blomberg's $K$
+```{r echo = F}
+k.blomberg <- function(tr, X) {
+    N = length(X)
+    ones = matrix(1, N)
+    C = vcv(tr)
+    C.inv = solve(C)
+    a.hat = solve(t(ones) %*% C.inv %*% ones) %*% (t(ones) %*% C.inv %*% X)
+    a.hat = rep(a.hat, N)
+    MSE0 = (t(X - a.hat) %*% (X - a.hat)) / (N - 1)
+    MSE = (t(X - a.hat) %*% C.inv %*% (X - a.hat)) / (N - 1)
+    MSE.ratio.brown = (1 / (N - 1)) * (sum(diag(C)) - N/sum(C.inv))
+    out = list(K = (MSE0 / MSE)/MSE.ratio.brown,
+               MSE0 = MSE0,
+               MSE = MSE,
+               MSE.ratio.brown = MSE.ratio.brown)
+    out
+    }
+```
+Blomberg et al. (2003) present an exceedingly clear exposition of both phylogenetic signal and the biological rationale underlying tree stretching. In this paper, Blomberg derives a novel phylogenetic signal statistic, $K$. The statistic starts with the mean squared error of the data:
+
+$$MSE_0 = {(X - \hat{a})'(X - \hat{a}) \over n-1}$$
+
+divided by the multivariate normal MSE, $\sigma^2$. The better the tree does at describing the covariance in the data, the lower $\sigma^2$ will be relative to the MSE calculated without taking into account $C$.
+
+---
+To normalize the ratio ${MSE_0 \over MSE}$, $K$ is calculated as that ratio <i>over</i> the ratio ${MSE_0 \over MSE}$ expected under Brownian motion:
+
+$$
+{MSE_0 \over MSE} = \left( {1 \over n-1} \right) \left( trV-{n \over \sum \sum V^{-1}} \right)
+$$
+
+Thus the entire expression for $K$ is
+
+$$
+K = {MSE_0 \over MSE}_{observed} / {MSE_0 \over MSE}_{expected}
+$$
+
+For our high and low phylogenetic signal datasets, $K=$ `r round(k.blomberg(tr3, dat3$high)$K, 3)` and `r round(k.blomberg(tr3, dat3$low)$K, 3)` respectively.
+
+---
+# Blomberg's $K$: significance testing
+We generally test the significance of $K$ relative to two null distributions:
+
+> * A fully random null distribution, which simulates the case where the observed data have no relationship to the tree. This is generated by permuting the tip states.
+> * A Brownian motion null, which simulates the case where tip data truly arise from a Brownian motion process. This is generated by simulating tip data under a Brownian motion process.
+
+Under both null distributions, significance is assessed by comparing observed $K$ with $K$ estimated on each simulated or permuted dataset. The proportion of $K_{null}$ less extreme than $K_{obs}$ is generally taken as evidence that $K_{obs}$ really means something.
+
+Stated another way, the proportion of $K_{null}$ more extreme than $K_{obs}$ estimates the Type I error rate and is your p-value.
+
+Simulating these distributions will be a problem for today's tutorial.
+
+---
+# Revisiting model-fitting before we break: rjMCMC on a set of rate-change models
+We talked in detail last week about information theoretic approaches to model evaluation. Let's look today at an alternative way of evaluating multiple models and estimating parameters over uncertainty in the parameter estimates under each candidate model and uncertainty in the models themselves.
+
+```{r echo = F}
+load('rj.mcmc.output.Rdata')
+a2 <- load.rjmcmc('relaxedBM.demo.rjMCMC/')
+```
+Let's imagine a scenario in which the rate changes abruptly in one clade. We have simulated this tree using the `ex.ratesimulator` and data using the `rTraitCont` functions from `geiger`, which implements Eastman et al. 2011.
+
+```{r fig.align = 'center', fig.width = 12, fig.height = 5, echo = F}
+plot(scl, show.tip.label = F)
+```
+
+---
+We run a reversible jump Markov chain Monte Carlo (rjMCMC) analysis. The method start with a tree with branch lengths, which we will refer to as starting model. At each step of this analysis, we do three things:
+
+> 1. Propose a change of either:
+>   * <b>The parameters of the character evolution model</b>, being either the vector of $\sigma^2$ or $\hat{a}$; or
+>   * <b>The model of character evolution</b>, either adding a rate category or merging two adjacent rate categories.
+> 1. Calculate the likelihood of this proposed model
+> 1. Compare the likelihood ratio of the proposed model and to the last model, and accept with a probability dictated by:
+>   * a sum of three ratios: the prior odds, the proposal densities, and the likelihoods
+>   * If the models differ in number of parameters, you also have to multiply this by the Hastings ratio, which is a ratio of the relative volumes of parameter space occupied by the two models. You can think of this as analogous to the penalty incurred in information criteria by having additional parameters in your model.
+
+---
+You can analyze your data using rjMCMC in `geiger` using the `rjmcmc.bm` function, which will allow you to look at shift in mean--modeled as "pulses in evolutionary rate along individual branches," as in Duchen et al. 2017--shifts in rate--modeled by stretching the tree, as illustrated in the previous slides--or both.
+,
+```
+r2 = 'demo.rjMCMC'
+rjmcmc.bm(phy, dat,
+             ngen=10000, samp=1, ## usually do more like ngen = 1E06, samp = 1000
+             filebase=r2, simple.start=TRUE, type="rbm")
+```
+
+---
+```{r echo = F, fig.width = 12, fig.height = 9, fig.align = 'center'}
+plot(a2$log[, c('lnL', 'root', 'shifts')])
+```
+
+---
+```{r echo = F, fig.width = 12, fig.height = 9, fig.align = 'center'}
+plot(x=a2, par="shifts", burnin=0.25, legend=TRUE, show.tip=FALSE, edge.width=2)
+```
